@@ -1,0 +1,347 @@
+program mc
+use module_mc
+implicit none
+real :: css,csh,chh,v
+real :: p,n2
+real :: a,b,c,d,r
+real :: ce1,ce2,ce3,den,vr,v1,v2,j0
+real :: vrc(3),vccm(3)
+real :: time
+integer :: p1,p2,n,i,cn_cnt
+integer :: dsec,section,test_num,c_he,c_si
+
+css = pi*rs*rs
+csh = pi*rr*rr
+chh = pi*rh*rh
+v   = pi*ra*ra*dsp
+p   = 1000.0
+n2  = nm*p/(R0*t0)
+
+call initial_he(n2)
+call initial_si()
+call calc_mfp(n2)
+call initial_cell(dsp)
+!begin calculating in time space
+section = 1000
+open(41,file="numbertime",status="unknown")
+do dsec = 0, section
+	write(*,*) "dsec=" , dsec
+	call id_to_seat()
+	if ((dsec<=30 .and. mod(dsec,5)==0) .or.                  &
+		(dsec>30  .and. dsec<=100 .and. mod(dsec,20)==0) .or. &
+		(dsec>100 .and. dsec<1000 .and. mod(dsec,50)==0) .or. &
+		(dsec>=1000 .and. mod(dsec,100)==0)) then
+		call static()
+		call static_den_meanv()
+		call static_v()
+		cn_cnt = 0
+		do n = 1, nsi
+			if (si(n)%f/=9 .and. si(n)%m>4) cn_cnt = cn_cnt + 1 
+		end do
+		write(41,*) dsec,cn_cnt
+	end if
+	do n = 1, ncell
+		den  = cell(n)%sh*wp1/v
+		c_si = cell(n)%sh
+		c_he = cell(n)%hh
+		ce1  = 0.0
+		ce2  = 2*vrm
+		ce3  = vrm
+		call random_seed()
+		! Si-He ----------------------------------------------------------------
+		if (c_si<=5 .or. c_he<=5) ce1=dtm
+		do while (ce1<dtm)
+			d = 0.0; r = 0.5
+			test_num = 0
+			do while (d<r .and. test_num<max_test_num)
+				call pick_one_si_part(test_num,p1,n)
+				call pick_one_he_atom(test_num,p2,n)
+				do i = 1,3
+					vrc(i) = si(p1)%v(i) - he(p2)%v(i)
+				end do
+				vr  = sqrt(vrc(1)**2 + vrc(2)**2 + vrc(3)**2)
+				if (vr>ce3) vr=ce3
+				d = vr/ce3
+				call random_number(r)
+			end do
+			if (test_num<max_test_num) then
+				call collition()
+				vccm    = (si(p1)%m*msi*si(p1)%v + mhe*he(p2)%v) / &
+				          (si(p1)%m*msi + mhe)
+				si(p1)%v = vccm + vrc*mhe/(si(p1)%m*msi + mhe)
+				he(p2)%v = vccm - vrc*si(p1)%m*msi/(si(p1)%m*msi + mhe)
+				si(p1)%f = 1
+				he(p2)%f = 1
+				c_si    = c_si - 1
+				c_he    = c_he - 1
+				ce1     = ce1 + v/(cell(n)%sh*wp1*wp2*cell(n)%hh*csh*vr)
+			else
+				ce1 = dtm
+			end if
+			if (c_si<=5 .or. c_he<=5) ce1=dtm
+		end do
+		! Si-Si ----------------------------------------------------------------
+		ce1 = 0.0
+		if (c_si<=10) ce1 = dtm
+		do while (ce1<dtm )
+			d = 0.0; r = 0.5
+			test_num = 0
+			do while(d<r .and. test_num<max_test_num)
+				call pick_one_si_part(test_num,p1,n)
+				call pick_one_si_part(test_num,p2,n)
+				do while(p1==p2 .and. test_num<max_test_num)
+					call pick_one_si_part(test_num,p2,n)
+				end do
+				do i = 1,3
+					vrc(i) = si(p1)%v(i) - si(p2)%v(i)
+				end do
+				vr  = sqrt(vrc(1)**2 + vrc(2)**2 + vrc(3)**2)
+				if (vr>ce3) ce3=vr
+				d = vr/ce3
+				call random_number(r)
+			end do
+			if (test_num<max_test_num) then
+				v1 = sqrt(si(p1)%v(1)**2 + si(p1)%v(2)**2 + si(p1)%v(3)**2)
+				v2 = sqrt(si(p2)%v(1)**2 + si(p2)%v(2)**2 + si(p2)%v(3)**2)
+				a  = -(si(p1)%m-1)/(si(p1)%m+100)
+				b  = -(si(p2)%m-1)/(si(p2)%m+100)
+				j0 = exp(a) + exp(b)
+				if (j0>1 .and. den>7.2e19 .and.  &
+					v1>1400 .and. v1<2000 .and.  &
+					v2>1400 .and. v2<2000) then
+					si(p1)%v = (si(p1)%m*si(p1)%v + si(p2)%m*si(p2)%v) / &
+					           (si(p1)%m + si(p2)%m)
+					si(p1)%f = 1
+					si(p2)%f = 9
+					si(p1)%m = si(p1)%m + si(p2)%m
+					!si(p2)%m = 0
+					c_si     = c_si - 2
+				else
+					call collition()
+					vccm     = (si(p1)%m*si(p1)%v + si(p2)%m*si(p2)%v) / &
+					           (si(p1)%m + si(p2)%m)
+					si(p1)%v = vccm + vrc*si(p2)%m / (si(p1)%m + si(p2)%m)
+					si(p2)%v = vccm - vrc*si(p1)%m / (si(p1)%m + si(p2)%m)
+					si(p1)%f = 1
+					si(p2)%f = 1
+					ce1      = ce1 + v/(cell(n)%sh*cell(n)%sh*wp1*wp1*css*vr)
+					c_si     = c_si - 2
+				end if
+			else
+				ce1 = dtm
+			end if
+			if (c_si<=10) ce1 = dtm
+		end do
+		! He-He ----------------------------------------------------------------
+		!ce1 = 0.0
+		!if (c_he<=10) ce1 = dtm
+		!do while(ce1<dtm)
+			!d = 0.0; r = 0.5
+			!test_num = 0
+			!do while(d<r .and. test_num<max_test_num)
+				!call pick_one_he_atom(test_num,p1,n)
+				!call pick_one_he_atom(test_num,p2,n)
+				!do while(p1==p2 .and. test_num<max_test_num)
+					!call pick_one_he_atom(test_num,p2,n)
+				!end do
+				!do i = 1,3
+					!vrc(i) = he(p1)%v(i) - he(p2)%v(i)
+				!end do
+				!vr  = sqrt(vrc(1)**2 + vrc(2)**2 + vrc(3)**2)
+				!if (vr>ce3) ce3 = vr
+				!d = vr/ce3
+				!call random_number(r)
+			!end do
+			!if (test_num<max_test_num) then
+				!call collition()
+				!vccm    = (he(p1)%v + he(p2)%v)/2
+				!he(p1)%v = vccm + vrc/2
+				!he(p2)%v = vccm - vrc/2
+				!he(p1)%f = 1
+				!he(p2)%f = 1
+				!ce1     = ce1 + v/(cell(n)%hh*cell(n)%hh*wp2*wp2*chh*vr)
+				!c_he    = c_he-2
+			!else
+				!ce1 = dtm
+			!end if
+			!if (c_he<=10) ce1 = dtm
+		!end do
+		!-----------------------------------------------------------------------
+	end do !space steps
+	do n = 1, nhe
+		he(n)%x = he(n)%x + he(n)%v(1)*dtm
+	end do
+	do n = 1, nsi
+		si(n)%x = si(n)%x + si(n)%v(1)*dtm
+		!v1 = sqrt(si(n)%v(1)**2 + si(n)%v(2)**2 + si(n)%v(3)**2)
+		!if (v1<500.0 .and. v1>0.0) si(n)%f = 2
+		!if (si(n)%x>=x0 .and. si(n)%v(1)<200.0) then
+			!si(n)%f = 3
+			!si(n)%x = x0
+			!si(n)%v = 0.0
+		!end if
+	end do
+end do !time steps
+close(41)
+call free_memory()
+!===============================================================================
+
+contains
+
+!===============================================================================
+	subroutine collition()
+		implicit none
+		call random_number(r)
+		a = 1.0 - r - r
+		b = SQRT(1.0 - a*a)
+		call random_number(r)
+		c = 2*pi*r
+		vrc(1) = b*cos(c)*vr
+		vrc(2) = b*sin(c)*vr
+		vrc(3) = a*vr
+	end subroutine collition
+!-------------------------------------------------------------------------------
+	subroutine static()
+		implicit none
+		integer :: numsz1(2000),numsz2(2000),numsz3(2000),numsz4(2000)
+		integer :: n,m
+		character(len=14) :: fname
+		character(len=4) :: tmpstr
+		numsz1 = 0
+		numsz2 = 0
+		numsz3 = 0
+		numsz4 = 0
+		do n=1,nsi
+			if (si(n)%f<2)  numsz1(si(n)%m) = numsz1(si(n)%m) + 1
+			if (si(n)%f==2) numsz2(si(n)%m) = numsz2(si(n)%m) + 1
+			if (si(n)%f==3) numsz3(si(n)%m) = numsz3(si(n)%m) + 1
+			if (si(n)%f/=9) numsz4(si(n)%m) = numsz4(si(n)%m) + 1
+		end do
+
+		write(tmpstr,"(I4.4)") dsec
+		fname="numsz1"//tmpstr//".dat"
+		open(51,file=fname,status="unknown")
+		do m=1,2000
+			if (numsz1(m)/=0) write(51,*) m,numsz1(m)
+		end do
+		close(51)
+
+		fname="numsz2"//tmpstr//".dat"
+		open(51,file=fname,status="unknown")
+		do m=1,2000
+			if (numsz2(m)/=0) write(51,*) m,numsz2(m)
+		end do
+		close(51)
+
+		fname="numsz3"//tmpstr//".dat"
+		open(51,file=fname,status="unknown")
+		do m=1,2000
+			if (numsz3(m)/=0) write(51,*) m,numsz3(m)
+		end do
+		close(51)
+
+		fname="numsz4"//tmpstr//".dat"
+		open(51,file=fname,status="unknown")
+		do m=1,2000
+			if (numsz4(m)/=0) write(51,*) m,numsz4(m)
+		end do
+		close(51)
+	end subroutine static
+!-------------------------------------------------------------------------------
+	subroutine static_den_meanv()
+		implicit none
+		integer, parameter :: max_n = 100
+		integer :: m,n
+		real :: cn_pos(max_n),sn_pos(max_n),hn_pos(max_n),an_pos(max_n)
+		real :: cv_pos(max_n),sv_pos(max_n)
+		real :: dx,vtmp,x_pos,v_pos
+		character(len=14) :: fname
+		character(len=4) :: tmpstr
+		dx     = x0/max_n
+		v_pos  = pi*ra*ra*dx
+		cn_pos = 0.0; sn_pos = 0.0; hn_pos = 0.0; an_pos = 0.0;
+		cv_pos = 0.0; sv_pos = 0.0
+		do n = 1, nhe
+			m         = int(he(n)%x/dx) + 1
+			if (m>max_n) m = max_n
+			hn_pos(m) = hn_pos(m) + 1
+		end do
+		do n = 1, nsi
+			if (si(n)%f/=9) then
+				vtmp = sqrt(si(n)%v(1)**2 + si(n)%v(2)**2 + si(n)%v(3)**2)
+				m    = int(si(n)%x/dx) + 1
+				if (m>max_n) m = max_n
+				sn_pos(m) = sn_pos(m) + 1
+				an_pos(m) = an_pos(m) + si(n)%m
+				sv_pos(m) = sv_pos(m) + vtmp
+				if (si(n)%m>4) then
+					cn_pos(m) = cn_pos(m) + 1
+					cv_pos(m) = cv_pos(m) + vtmp
+				end if
+			end if
+		end do
+
+		write(tmpstr,"(I4.4)") dsec
+		fname="denspc"//tmpstr//".dat"
+		open (unit=61, file=fname, status="unknown")
+		fname="meanvr"//tmpstr//".dat"
+		open (unit=62, file=fname, status="unknown")
+		do m = 1, max_n
+			if (sn_pos(m)/=0.0) sv_pos(m) = sv_pos(m)/sn_pos(m)
+			if (cn_pos(m)/=0.0) cv_pos(m) = cv_pos(m)/cn_pos(m)
+			sn_pos(m) = sn_pos(m)*wp1/v_pos
+			cn_pos(m) = cn_pos(m)*wp1/v_pos
+			an_pos(m) = an_pos(m)*wp1/v_pos
+			hn_pos(m) = hn_pos(m)*wp2/v_pos
+			x_pos     = (m-0.5)*dx  
+			write(61,*) x_pos,cn_pos(m),sn_pos(m),hn_pos(m),an_pos(m)
+			write(62,*) x_pos,cv_pos(m),sv_pos(m)
+		end do
+		close(61)
+		close(62)
+	end subroutine static_den_meanv
+!-------------------------------------------------------------------------------
+	subroutine static_v()
+		implicit none
+		real,parameter :: max_v = 20000.0
+		integer,parameter :: max_n = 2000
+		integer :: sn_vr(max_n),sn_vx(max_n)
+		real :: dv,vtmp1,vtmp2,vx1,vx2
+		integer :: m,n
+		character(len=14) :: fname1,fname2
+		character(len=4) :: tmpstr
+		dv = max_v/max_n
+		do m = 1, max_n
+			sn_vr(m) = 0
+			sn_vx(m) = 0
+		end do
+		do n = 1, nsi
+			if (si(n)%f/=9) then
+				vtmp1 = sqrt(si(n)%v(1)**2 + si(n)%v(2)**2 + si(n)%v(3)**2)
+				m = int(vtmp1/dv) + 1
+				if (m>max_n) m = max_n
+				sn_vr(m) = sn_vr(m) + 1
+
+				vtmp2 = si(n)%v(1) + max_v/2
+				m = int(vtmp2/dv) + 1
+				if (m>max_n) m = max_n
+				sn_vx(m) = sn_vx(m) + 1
+			end if
+		end do
+		write(tmpstr,"(I4.4)") dsec
+		fname1="svxspa"//tmpstr//".dat"
+		fname2="svrspa"//tmpstr//".dat"
+		open (unit=71, file=fname1, status="unknown")
+		open (unit=72, file=fname2, status="unknown")
+		do m = 1, max_n
+			vx1 = (m-1)*dv + dv/2
+			vx2 = vx1 - max_v/2
+			write(71,*) vx2,sn_vx(m)
+			write(72,*) vx1,sn_vr(m)
+		end do
+		close(71)
+		close(72)
+	end subroutine static_v
+!-------------------------------------------------------------------------------
+
+end program mc
